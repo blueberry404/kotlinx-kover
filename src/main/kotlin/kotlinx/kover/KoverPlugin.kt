@@ -40,6 +40,10 @@ class KoverPlugin : Plugin<Project> {
     private val defaultJacocoVersion = "0.8.7"
 
     override fun apply(target: Project) {
+        if (target.findProperty("kotlinx.kover.disable") == "true") {
+            return
+        }
+
         val koverExtension = target.createKoverExtension()
         val agents = AgentsFactory.createAgents(target, koverExtension)
 
