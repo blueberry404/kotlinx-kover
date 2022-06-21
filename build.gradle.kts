@@ -25,15 +25,15 @@ dependencies {
     compileOnly(kotlin("stdlib"))
 
     compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10")
-    compileOnly("com.android.tools.build:gradle:4.2.2")
+    compileOnly("com.android.tools.build:gradle:7.2.0")
 
     testImplementation(kotlin("test"))
 
-    "functionalTestImplementation"(gradleTestKit())
-    // dependencies only for plugin's classpath to work with Kotlin Multi-Platform and Android plugins
-    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10")
-    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-compiler-embeddable:1.6.10")
-    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-compiler-runner:1.6.10")
+//    "functionalTestImplementation"(gradleTestKit())
+//    // dependencies only for plugin's classpath to work with Kotlin Multi-Platform and Android plugins
+//    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10")
+//    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-compiler-embeddable:1.6.10")
+//    "functionalTestCompileOnly"("org.jetbrains.kotlin:kotlin-compiler-runner:1.6.10")
 }
 
 java {

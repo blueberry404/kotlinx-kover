@@ -4,37 +4,43 @@
 
 package kotlinx.kover
 
-import kotlinx.kover.adapters.*
-import kotlinx.kover.api.*
-import kotlinx.kover.api.KoverPaths.MERGED_HTML_REPORT_DEFAULT_PATH
+import com.android.build.api.variant.AndroidComponentsExtension
+import kotlinx.kover.adapters.androidPluginIsApplied
+import kotlinx.kover.api.CoverageEngine
+import kotlinx.kover.api.KoverExtension
 import kotlinx.kover.api.KoverNames.CHECK_TASK_NAME
 import kotlinx.kover.api.KoverNames.COLLECT_REPORTS_TASK_NAME
-import kotlinx.kover.api.KoverNames.MERGED_HTML_REPORT_TASK_NAME
 import kotlinx.kover.api.KoverNames.HTML_REPORT_TASK_NAME
-import kotlinx.kover.api.KoverNames.REPORT_TASK_NAME
-import kotlinx.kover.api.KoverNames.VERIFY_TASK_NAME
+import kotlinx.kover.api.KoverNames.MERGED_HTML_REPORT_TASK_NAME
 import kotlinx.kover.api.KoverNames.MERGED_REPORT_TASK_NAME
-import kotlinx.kover.api.KoverNames.XML_REPORT_TASK_NAME
+import kotlinx.kover.api.KoverNames.MERGED_VERIFY_TASK_NAME
+import kotlinx.kover.api.KoverNames.MERGED_XML_REPORT_TASK_NAME
+import kotlinx.kover.api.KoverNames.REPORT_TASK_NAME
 import kotlinx.kover.api.KoverNames.ROOT_EXTENSION_NAME
 import kotlinx.kover.api.KoverNames.TASK_EXTENSION_NAME
 import kotlinx.kover.api.KoverNames.VERIFICATION_GROUP
-import kotlinx.kover.api.KoverNames.MERGED_VERIFY_TASK_NAME
-import kotlinx.kover.api.KoverNames.MERGED_XML_REPORT_TASK_NAME
+import kotlinx.kover.api.KoverNames.VERIFY_TASK_NAME
+import kotlinx.kover.api.KoverNames.XML_REPORT_TASK_NAME
 import kotlinx.kover.api.KoverPaths.ALL_PROJECTS_REPORTS_DEFAULT_PATH
-import kotlinx.kover.api.KoverPaths.PROJECT_HTML_REPORT_DEFAULT_PATH
+import kotlinx.kover.api.KoverPaths.MERGED_HTML_REPORT_DEFAULT_PATH
 import kotlinx.kover.api.KoverPaths.MERGED_XML_REPORT_DEFAULT_PATH
+import kotlinx.kover.api.KoverPaths.PROJECT_HTML_REPORT_DEFAULT_PATH
 import kotlinx.kover.api.KoverPaths.PROJECT_XML_REPORT_DEFAULT_PATH
-import kotlinx.kover.engines.commons.*
+import kotlinx.kover.api.KoverTaskExtension
+import kotlinx.kover.engines.commons.AgentsFactory
 import kotlinx.kover.engines.commons.CoverageAgent
-import kotlinx.kover.engines.intellij.*
+import kotlinx.kover.engines.commons.getFor
+import kotlinx.kover.engines.intellij.defaultIntellijVersion
 import kotlinx.kover.tasks.*
 import org.gradle.api.*
-import org.gradle.api.provider.*
-import org.gradle.api.tasks.*
-import org.gradle.api.tasks.testing.*
-import org.gradle.process.*
+import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Nested
+import org.gradle.api.tasks.testing.Test
+import org.gradle.process.CommandLineArgumentProvider
 import java.io.File
-import kotlin.reflect.*
+import kotlin.reflect.KClass
 
 class KoverPlugin : Plugin<Project> {
     private val defaultJacocoVersion = "0.8.7"
@@ -47,60 +53,82 @@ class KoverPlugin : Plugin<Project> {
 
         target.allprojects {
             it.applyToProject(providers, agents)
+            it.createCollectingTask()
         }
-        target.createCollectingTask()
 
         target.createMergedTasks(providers)
     }
 
-    private fun Project.applyToProject(providers: BuildProviders, agents: Map<CoverageEngine, CoverageAgent>) {
+    private fun Project.applyToProject(
+        providers: BuildProviders,
+        agents: Map<CoverageEngine, CoverageAgent>
+    ) {
         val projectProviders =
             providers.projects[path]
                 ?: throw GradleException("Kover: Providers for project '$name' ('$path') was not found")
 
-        val xmlReportTask = createKoverProjectTask(
-            XML_REPORT_TASK_NAME,
-            KoverXmlReportTask::class,
-            providers,
-            projectProviders
-        ) {
-            it.xmlReportFile.set(layout.buildDirectory.file(PROJECT_XML_REPORT_DEFAULT_PATH))
-            it.description = "Generates code coverage XML report for all enabled test tasks in one project."
-        }
+        val androidComponents = extensions.getByType(AndroidComponentsExtension::class.java)
 
-        val htmlReportTask = createKoverProjectTask(
-            HTML_REPORT_TASK_NAME,
-            KoverHtmlReportTask::class,
-            providers,
-            projectProviders
-        ) {
-            it.htmlReportDir.set(it.project.layout.buildDirectory.dir(PROJECT_HTML_REPORT_DEFAULT_PATH))
-            it.description = "Generates code coverage HTML report for all enabled test tasks in one project."
-        }
+        val debugVariants = androidComponents.selector().withBuildType("debug")
 
-        val verifyTask = createKoverProjectTask(
-            VERIFY_TASK_NAME,
-            KoverVerificationTask::class,
-            providers,
-            projectProviders
-        ) {
-            it.onlyIf { t -> (t as KoverVerificationTask).rules.isNotEmpty() }
-            it.description = "Verifies code coverage metrics of one project based on specified rules."
-        }
+        androidComponents.onVariants(debugVariants) {
 
-        tasks.create(REPORT_TASK_NAME) {
-            it.group = VERIFICATION_GROUP
-            it.dependsOn(xmlReportTask)
-            it.dependsOn(htmlReportTask)
-            it.description = "Generates code coverage HTML and XML reports for all enabled test tasks in one project."
-        }
+            val variantName = it.name.capitalize()
 
-        tasks.configureEach {
-            if (it.name == CHECK_TASK_NAME) {
-                it.dependsOn(verifyTask)
+            val xmlReportTask = createKoverProjectTask(
+                "$XML_REPORT_TASK_NAME$variantName",
+                variantName,
+                KoverXmlReportTask::class,
+                providers,
+                projectProviders
+            ) {
+                it.xmlReportFile.set(layout.buildDirectory.file(PROJECT_XML_REPORT_DEFAULT_PATH))
+                it.description =
+                    "Generates code coverage XML report for all enabled test tasks in one project."
+            }
+
+            val htmlReportTask = createKoverProjectTask(
+                "$HTML_REPORT_TASK_NAME$variantName",
+                variantName,
+                KoverHtmlReportTask::class,
+                providers,
+                projectProviders
+            ) {
+                it.htmlReportDir.set(
+                    it.project.layout.buildDirectory.dir(
+                        PROJECT_HTML_REPORT_DEFAULT_PATH
+                    )
+                )
+                it.description =
+                    "Generates code coverage HTML report for test tasks in $variantName."
+            }
+
+            val verifyTask = createKoverProjectTask(
+                "$VERIFY_TASK_NAME$variantName",
+                variantName,
+                KoverVerificationTask::class,
+                providers,
+                projectProviders
+            ) {
+                it.onlyIf { t -> (t as KoverVerificationTask).rules.isNotEmpty() }
+                it.description =
+                    "Verifies code coverage metrics of one project based on specified rules."
+            }
+
+            tasks.create("$REPORT_TASK_NAME$variantName") {
+                it.group = VERIFICATION_GROUP
+                it.dependsOn(xmlReportTask)
+                it.dependsOn(htmlReportTask)
+                it.description =
+                    "Generates code coverage HTML and XML reports for all enabled test tasks in one project."
+            }
+
+            tasks.configureEach {
+                if (it.name == CHECK_TASK_NAME) {
+                    it.dependsOn(verifyTask)
+                }
             }
         }
-
         tasks.withType(Test::class.java).configureEach { t ->
             t.configTestTask(providers, agents)
         }
@@ -113,7 +141,8 @@ class KoverPlugin : Plugin<Project> {
             providers
         ) {
             it.xmlReportFile.set(layout.buildDirectory.file(MERGED_XML_REPORT_DEFAULT_PATH))
-            it.description = "Generates code coverage XML report for all enabled test tasks in all projects."
+            it.description =
+                "Generates code coverage XML report for all enabled test tasks in all projects."
         }
 
         val htmlReportTask = createKoverMergedTask(
@@ -122,14 +151,16 @@ class KoverPlugin : Plugin<Project> {
             providers
         ) {
             it.htmlReportDir.set(layout.buildDirectory.dir(MERGED_HTML_REPORT_DEFAULT_PATH))
-            it.description = "Generates code coverage HTML report for all enabled test tasks in all projects."
+            it.description =
+                "Generates code coverage HTML report for all enabled test tasks in all projects."
         }
 
         val reportTask = tasks.create(MERGED_REPORT_TASK_NAME) {
             it.group = VERIFICATION_GROUP
             it.dependsOn(xmlReportTask)
             it.dependsOn(htmlReportTask)
-            it.description = "Generates code coverage HTML and XML reports for all enabled test tasks in all projects."
+            it.description =
+                "Generates code coverage HTML and XML reports for all enabled test tasks in all projects."
         }
 
         val verifyTask = createKoverMergedTask(
@@ -138,7 +169,8 @@ class KoverPlugin : Plugin<Project> {
             providers
         ) {
             it.onlyIf { t -> (t as KoverMergedVerificationTask).rules.isNotEmpty() }
-            it.description = "Verifies code coverage metrics of all projects based on specified rules."
+            it.description =
+                "Verifies code coverage metrics of all projects based on specified rules."
         }
 
         tasks.configureEach {
@@ -184,24 +216,38 @@ class KoverPlugin : Plugin<Project> {
     }
 
     private fun Project.createCollectingTask() {
-        tasks.create(COLLECT_REPORTS_TASK_NAME, KoverCollectingTask::class.java) { task ->
-            task.group = VERIFICATION_GROUP
-            task.description = "Collects all projects reports into one directory."
-            task.outputDir.set(project.layout.buildDirectory.dir(ALL_PROJECTS_REPORTS_DEFAULT_PATH))
-            // disable UP-TO-DATE check for task: it will be executed every time
-            task.outputs.upToDateWhen { false }
 
-            allprojects { proj ->
+        val androidComponents = extensions.getByType(AndroidComponentsExtension::class.java)
+
+        val debugVariants = androidComponents.selector().withBuildType("debug")
+
+        androidComponents.onVariants(debugVariants) {
+
+            val variantName = it.name.capitalize()
+
+            tasks.create("$COLLECT_REPORTS_TASK_NAME$variantName", KoverCollectingTask::class.java) { task ->
+                task.group = VERIFICATION_GROUP
+                task.description = "Collects $name project reports into one directory."
+                task.outputDir.set(
+                    project.layout.buildDirectory.dir(
+                        ALL_PROJECTS_REPORTS_DEFAULT_PATH
+                    )
+                )
+                // disable UP-TO-DATE check for task: it will be executed every time
+                task.outputs.upToDateWhen { false }
+
                 val xmlReportTask =
-                    proj.tasks.withType(KoverXmlReportTask::class.java).getByName(XML_REPORT_TASK_NAME)
+                    tasks.withType(KoverXmlReportTask::class.java)
+                        .getByName("$XML_REPORT_TASK_NAME$variantName")
                 val htmlReportTask =
-                    proj.tasks.withType(KoverHtmlReportTask::class.java).getByName(HTML_REPORT_TASK_NAME)
+                    tasks.withType(KoverHtmlReportTask::class.java)
+                        .getByName("$HTML_REPORT_TASK_NAME$variantName")
 
                 task.mustRunAfter(xmlReportTask)
                 task.mustRunAfter(htmlReportTask)
 
-                task.xmlFiles[proj.path] = xmlReportTask.xmlReportFile
-                task.htmlDirs[proj.path] = htmlReportTask.htmlReportDir
+                task.xmlFiles[path] = xmlReportTask.xmlReportFile
+                task.htmlDirs[path] = htmlReportTask.htmlReportDir
             }
         }
     }
@@ -209,6 +255,7 @@ class KoverPlugin : Plugin<Project> {
 
     private fun <T : KoverProjectTask> Project.createKoverProjectTask(
         taskName: String,
+        variantName: String,
         type: KClass<T>,
         providers: BuildProviders,
         projectProviders: ProjectProviders,
@@ -228,7 +275,7 @@ class KoverPlugin : Plugin<Project> {
 
         // it is necessary to read all binary reports because project's classes can be invoked in another project
         task.binaryReportFiles.set(projectProviders.reports)
-        task.dependsOn(projectProviders.tests)
+        task.dependsOn(projectProviders.tests.get().filter { it.name.contains(variantName) })
 
         val disabledProvider = projectProviders.disabled
         task.onlyIf { !disabledProvider.get() }
@@ -255,12 +302,14 @@ class KoverPlugin : Plugin<Project> {
         providers: BuildProviders,
         agents: Map<CoverageEngine, CoverageAgent>
     ) {
-        val taskExtension = extensions.create(TASK_EXTENSION_NAME, KoverTaskExtension::class.java, project.objects)
+        val taskExtension =
+            extensions.create(TASK_EXTENSION_NAME, KoverTaskExtension::class.java, project.objects)
 
         taskExtension.isDisabled = false
         taskExtension.binaryReportFile.set(project.provider {
             val koverExtension = providers.koverExtension.get()
-            val suffix = if (koverExtension.coverageEngine.get() == CoverageEngine.INTELLIJ) ".ic" else ".exec"
+            val suffix =
+                if (koverExtension.coverageEngine.get() == CoverageEngine.INTELLIJ) ".ic" else ".exec"
             project.layout.buildDirectory.get().file("kover/$name$suffix").asFile
         })
 
@@ -281,7 +330,8 @@ class KoverPlugin : Plugin<Project> {
         val sourceErrorProvider = project.provider {
             File(taskExtension.binaryReportFile.get().parentFile, "coverage-error.log")
         }
-        val targetErrorProvider = project.layout.buildDirectory.file("kover/errors/$name.log").map { it.asFile }
+        val targetErrorProvider =
+            project.layout.buildDirectory.file("kover/errors/$name.log").map { it.asFile }
 
         doFirst(BinaryReportCleanupAction(project.path, providers.koverExtension, taskExtension))
         doLast(MoveIntellijErrorLogAction(sourceErrorProvider, targetErrorProvider))
@@ -393,6 +443,7 @@ private class CoverageArgumentProvider(
             taskExtension.excludes = taskExtension.excludes + "android.*" + "com.android.*"
         }
 
-        return agents.getFor(koverExtensionValue.coverageEngine.get()).buildCommandLineArgs(task, taskExtension)
+        return agents.getFor(koverExtensionValue.coverageEngine.get())
+            .buildCommandLineArgs(task, taskExtension)
     }
 }
